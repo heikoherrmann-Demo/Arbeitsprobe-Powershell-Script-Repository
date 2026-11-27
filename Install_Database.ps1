@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Creates two domain groups, adds the current user to them and runs a SQL file
+    Creates three domain groups, adds the current user to them and runs a SQL file
     against a MS SQL Server. Replaces the placeholders #DBNAME# and #DOMAIN#.
 
 .DESCRIPTION
@@ -55,7 +55,7 @@ Add-Type -AssemblyName System.DirectoryServices
 $PlaceholderDb     = '#DBNAME#'
 $PlaceholderDomain = '#DOMAIN#'
 $PlaceholderServer = '#DBSERVER#'
-$GroupNames        = @('GG_PS_Executors', 'GG_PS_Uploaders')
+$GroupNames        = @('GG_PS_Executors', 'GG_PS_Uploaders', 'GG_PS_Viewer')
 
 # ---------------------------------------------------------------
 # Helper: Read-Host with default value
@@ -311,6 +311,7 @@ try {
     Write-host "  - A running MS SQL Server (Express is possible)" -ForegroundColor Yellow
     Write-host "  - This Account has the Rights to create Domain Groups" -ForegroundColor Yellow
     Write-host "  - The database does not exist yet" -ForegroundColor Yellow
+    Write-host "  - The Database Account should bei 'sa'" -ForegroundColor Yellow
     Write-Host ''
 
     # Give the user the chance to abort (Ctrl+C also works at any prompt)
@@ -645,11 +646,11 @@ try {
     Write-Host ''
     Write-Host "Done. The script was executed successfully (database: $dbName)." -ForegroundColor Green
     Write-Host 'Note: Log off and on again so that the new group membership of the current user takes effect.' -ForegroundColor Yellow
+    Write-Host ''
 
- 
- 
- 
-    
+    Write-Host "Next Steps: "
+    Write-Host "   - add Users to the groups $($GroupNames -join ",")"
+  
     Start-Process "$scriptPath\Shortintroduktion.pdf"
 }
 catch {
