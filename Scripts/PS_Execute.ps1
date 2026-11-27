@@ -27,6 +27,20 @@
       - Im Runspace steht die Variable $PS_ExecutionID (GUID dieses Laufs) zur Verfügung,
         z. B. um eigene Ergebnisse mit PS_ExecutionLog zu verknüpfen.
 
+    Mehrere Scripte in einer Session:
+      Mit -ScriptName A,B,C werden mehrere Scripte nacheinander im SELBEN Runspace ausgeführt. Funktionen,
+      Variablen und geladene Module früherer Scripte stehen den späteren zur Verfügung. Beispiel: Lib_Common
+      definiert Funktionen, Main_Job ruft sie auf (-ScriptName Lib_Common,Main_Job). Regeln:
+        - Das LETZTE Script ist das Hauptscript: Es erhält -ScriptParameters, und der Lauf wird unter seinem
+          Namen protokolliert (PS_ExecutionLog, -ShowLastRun, -ShowOutput). Alle beteiligten Scripte mit
+          Version stehen als erster Ausgabeeintrag (INFORMATION); die Ausgaben tragen den Scriptnamen als Präfix.
+        - Alle Scripte werden zuerst abgerufen und per Hash geprüft. Ist eines nicht auffindbar oder
+          manipuliert, wird KEIN Script ausgeführt. Jeder Abruf steht im Zugriffsprotokoll.
+        - Bricht ein Script mit einem terminierenden Fehler (throw) ab oder läuft in den Timeout, werden die
+          folgenden Scripte nicht ausgeführt. Nicht terminierende Fehler stoppen die Session nicht.
+        - -TimeoutSec gilt für alle Scripte zusammen. Der Status ist der schlechteste aller Scripte.
+      Namen werden durch Komma getrennt (bei Aufruf mit -File der Aufgabenplanung auch ohne Anführungszeichen).
+
     Statusermittlung:
       ERROR     terminierender Fehler oder mindestens ein Eintrag im Fehlerstrom
       WARNING   keine Fehler, aber mindestens eine Warnung
@@ -39,11 +53,20 @@
     nächsten Lauf bzw. mit -FlushQueue übertragen. Läuft die Verbindung bereits zu Beginn nicht,
     kann das Script nicht abgerufen werden; der Lauf endet mit Exitcode 2.
 
+    Abfragemodus (führt nichts aus, zeigt nur gespeicherte Ergebnisse):
+      -ShowOutput  -ScriptName <Name>   zeigt die gespeicherten Ausgaben des letzten Laufs
+      -ShowLastRun -ScriptName <Name>   zeigt Status, Zeiten, Dauer und Fehlermeldung des letzten Laufs
+    Mit -ComputerName <Rechner> wird auf einen Rechner eingeschränkt, sonst gilt der zuletzt
+    gestartete Lauf auf beliebigem Rechner. Benötigt PS_ViewerRole (siehe SQL_ShowLastRun.sql).
+    Zeitangaben werden in der lokalen Zeit dieses Rechners angezeigt.
+
 .PARAMETER ScriptName
-    Name des Scripts im Repository (entspricht dem Dateinamen ohne .ps1 beim Upload).
+    Name des Scripts im Repository (entspricht dem Dateinamen ohne .ps1 beim Upload). Mehrere Namen,
+    durch Komma getrennt, werden in dieser Reihenfolge in einer Session ausgeführt (das letzte ist das
+    Hauptscript). Scriptnamen dürfen dafür kein Komma enthalten.
 
 .PARAMETER ScriptID
-    Alternativ zum Namen: ID des Scripts.
+    Alternativ zum Namen: ID eines einzelnen Scripts (für mehrere Scripte -ScriptName verwenden).
 
 .PARAMETER ListScripts
     Listet die für diesen Rechner verfügbaren (aktiven) Scripte auf und beendet sich.
@@ -55,14 +78,15 @@
     SQL-Server-Instanz, z. B. "SQL01" oder "SQL01\INST1".
 
 .PARAMETER Database
-    Datenbankname. Standard: #DBNAME#.
+    Datenbankname. Standard: PowerShellAutomation.
 
 .PARAMETER ScriptParameters
-    Hashtable mit Parametern, die an das Repository-Script übergeben werden.
+    Hashtable mit Parametern, die an das Repository-Script übergeben werden. Bei mehreren Scripten
+    erhält nur das letzte (Hauptscript) die Parameter.
 
 .PARAMETER TimeoutSec
-    Maximale Laufzeit des Scripts in Sekunden (0 = unbegrenzt). Standard: 3600.
-    Bei Überschreitung wird das Script gestoppt und der Status CANCELLED gesetzt.
+    Maximale Laufzeit in Sekunden (0 = unbegrenzt). Standard: 3600. Bei mehreren Scripten gilt die
+    Zeit für alle zusammen. Bei Überschreitung wird das laufende Script gestoppt, der Status ist CANCELLED.
 
 .PARAMETER CaptureVerbose
     Verbose-Ausgaben des Scripts erfassen (setzt $VerbosePreference auf Continue).
@@ -74,7 +98,20 @@
     Modulinventur überspringen (Get-Module -ListAvailable kann einige Sekunden dauern).
 
 .PARAMETER ShowOutput
-    Erfasste Ausgaben zusätzlich auf der Konsole anzeigen.
+    Abfragemodus: zeigt die gespeicherten Ausgaben des letzten Laufs von -ScriptName (kein Ausführen).
+    Bisher bedeutete -ShowOutput "Ausgaben des gerade ausgeführten Laufs anzeigen": Das heißt jetzt -PrintOutput.
+
+.PARAMETER ShowLastRun
+    Abfragemodus: zeigt Status, Start, Ende, Dauer, Rechner, Konto und Fehlermeldung des letzten Laufs von -ScriptName.
+
+.PARAMETER ComputerName
+    Nur für -ShowOutput und -ShowLastRun: letzten Lauf auf diesem Rechner suchen (Standard: beliebiger Rechner).
+
+.PARAMETER OutputType
+    Nur für -ShowOutput: nur diese Ausgabetypen anzeigen (OUTPUT, ERROR, WARNING, INFORMATION, VERBOSE, DEBUG).
+
+.PARAMETER PrintOutput
+    Erfasste Ausgaben des gerade ausgeführten Scripts zusätzlich auf der Konsole anzeigen.
 
 .PARAMETER NoFlush
     Wartende Ergebnisse früherer Läufe zu Beginn nicht nachsenden.
@@ -102,10 +139,20 @@
     .\PS_Execute.ps1 -ListScripts -SqlServer SQL01
 
 .EXAMPLE
-    .\PS_Execute.ps1 -ScriptName Get-DiskReport -SqlServer SQL01 -ShowOutput
+    .\PS_Execute.ps1 -ScriptName Get-DiskReport -SqlServer SQL01 -PrintOutput
+
+.EXAMPLE
+    # Abfragemodus: Ausgaben bzw. Status des letzten Laufs anzeigen (es wird nichts ausgeführt)
+    .\PS_Execute.ps1 -ShowOutput  -ScriptName Get-DiskReport -SqlServer SQL01
+    .\PS_Execute.ps1 -ShowLastRun -ScriptName Get-DiskReport -SqlServer SQL01 -ComputerName VM-SCRIPT
+    .\PS_Execute.ps1 -ShowOutput  -ScriptName Get-DiskReport -SqlServer SQL01 -OutputType ERROR,WARNING
 
 .EXAMPLE
     .\PS_Execute.ps1 -ScriptName Cleanup-Temp -SqlServer SQL01 -ScriptParameters @{ OlderThanDays = 30 }
+
+.EXAMPLE
+    # Mehrere Scripte in einer Session: Lib_Common (Funktionen), danach das Hauptscript Main_Job
+    .\PS_Execute.ps1 -ScriptName Lib_Common,Lib_Logging,Main_Job -SqlServer SQL01 -ScriptParameters @{ Mode = 'Full' }
 
 .EXAMPLE
     # Windows-Aufgabenplanung (Programm: pwsh.exe bzw. powershell.exe)
@@ -114,15 +161,19 @@
 .NOTES
     Exitcodes: 0 = Erfolg (SUCCESS/WARNING), 1 = Script mit ERROR oder CANCELLED beendet,
                2 = keine SQL-Verbindung, 3 = Script nicht gefunden oder nicht abrufbar,
-               4 = Hash-Abweichung (Script wurde nicht ausgeführt).
+               4 = Hash-Abweichung (Script wurde nicht ausgeführt). Im Abfragemodus bedeutet 3:
+               kein Lauf gefunden.
     Benötigt EXECUTE-Rechte auf PS_GetScripts, PS_GetScript, PS_WriteExecutionLog und
-    PS_WriteExecutionOutput (PS_ExecutorRole). Lauffähig unter Windows PowerShell 5.1 und PowerShell 7+.
+    PS_WriteExecutionOutput (PS_ExecutorRole). Der Abfragemodus benötigt zusätzlich PS_GetLastExecution
+    und PS_GetExecutionOutput (PS_ViewerRole). Lauffähig unter Windows PowerShell 5.1 und PowerShell 7+.
 #>
 [CmdletBinding(DefaultParameterSetName = 'ByName')]
 param(
     [Parameter(Mandatory, ParameterSetName = 'ByName', Position = 0)]
+    [Parameter(Mandatory, ParameterSetName = 'ShowOutput', Position = 0)]
+    [Parameter(Mandatory, ParameterSetName = 'ShowLastRun', Position = 0)]
     [ValidateNotNullOrEmpty()]
-    [string]$ScriptName,
+    [string[]]$ScriptName,
 
     [Parameter(Mandatory, ParameterSetName = 'ById')]
     [ValidateRange(1, 2147483647)]
@@ -134,8 +185,23 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Flush')]
     [switch]$FlushQueue,
 
-    [string]$SqlServer = '#DBSERVER#',
+    [Parameter(Mandatory, ParameterSetName = 'ShowOutput')]
+    [switch]$ShowOutput,
 
+    [Parameter(Mandatory, ParameterSetName = 'ShowLastRun')]
+    [switch]$ShowLastRun,
+
+    [Parameter(ParameterSetName = 'ShowOutput')]
+    [Parameter(ParameterSetName = 'ShowLastRun')]
+    [ValidateNotNullOrEmpty()]
+    [string]$ComputerName,
+
+    [Parameter(ParameterSetName = 'ShowOutput')]
+    [ValidateSet('OUTPUT', 'ERROR', 'WARNING', 'INFORMATION', 'VERBOSE', 'DEBUG')]
+    [string[]]$OutputType,
+
+    
+    [string]$SqlServer = '#DBSERVER#',
     [string]$Database = '#DBNAME#',
 
     [Parameter(ParameterSetName = 'ByName')]
@@ -148,7 +214,7 @@ param(
     [switch]$CaptureVerbose,
     [switch]$CaptureDebug,
     [switch]$SkipModuleInventory,
-    [switch]$ShowOutput,
+    [switch]$PrintOutput,
     [switch]$NoFlush,
     [switch]$ValidateServerCertificate,
 
@@ -413,6 +479,62 @@ function Write-ExecutionOutputToDb {
 }
 
 # ======================================================================
+# Abfrage des letzten Laufs (Abfragemodus)
+# ======================================================================
+function Get-LastExecution {
+    # Liefert den zuletzt gestarteten Lauf eines Scripts (optional nur auf einem Rechner) oder $null.
+    param([Parameter(Mandatory)][string]$Name, [string]$Computer)
+    $computerValue = if ([string]::IsNullOrWhiteSpace($Computer)) { $null } else { $Computer }
+    $cmd = New-SqlCommandObject -ProcedureName 'dbo.PS_GetLastExecution'
+    try {
+        Add-SqlParameter -Command $cmd -Name '@ScriptName'   -Type NVarChar -Size 200 -Value $Name
+        Add-SqlParameter -Command $cmd -Name '@ComputerName' -Type NVarChar -Size 256 -Value $computerValue
+        $reader = $cmd.ExecuteReader()
+        try {
+            if (-not $reader.Read()) { return $null }
+            [pscustomobject]@{
+                ExecutionID       = [guid]$reader['ExecutionID']
+                ScriptID          = [int]$reader['ScriptID']
+                ScriptName        = [string]$reader['ScriptName']
+                ScriptVersion     = [int]$reader['ScriptVersion']
+                ComputerName      = [string]$reader['ComputerName']
+                RunsAs            = [string]$reader['RunsAs']
+                Status            = [string]$reader['ExecutionStatus']
+                StartedUtc        = [datetime]$reader['StartedAt']
+                FinishedUtc       = $(if ($reader['FinishedAt'] -is [System.DBNull]) { $null } else { [datetime]$reader['FinishedAt'] })
+                DurationMs        = $(if ($reader['DurationMs'] -is [System.DBNull]) { $null } else { [long]$reader['DurationMs'] })
+                ErrorMessage      = $(if ($reader['ErrorMessage'] -is [System.DBNull]) { $null } else { [string]$reader['ErrorMessage'] })
+                OutputCount       = [int]$reader['OutputCount']
+            }
+        }
+        finally { $reader.Dispose() }
+    }
+    finally { $cmd.Dispose() }
+}
+
+function Get-ExecutionOutputRows {
+    param([Parameter(Mandatory)][guid]$ExecutionId)
+    $cmd  = New-SqlCommandObject -ProcedureName 'dbo.PS_GetExecutionOutput'
+    $list = [System.Collections.Generic.List[object]]::new()
+    try {
+        Add-SqlParameter -Command $cmd -Name '@ExecutionID' -Type UniqueIdentifier -Value $ExecutionId
+        $reader = $cmd.ExecuteReader()
+        try {
+            while ($reader.Read()) {
+                $list.Add([pscustomobject]@{
+                        OutputID   = [long]$reader['OutputID']
+                        OutputType = [string]$reader['OutputType']
+                        OutputText = $(if ($reader['OutputText'] -is [System.DBNull]) { '' } else { [string]$reader['OutputText'] })
+                    })
+            }
+        }
+        finally { $reader.Dispose() }
+    }
+    finally { $cmd.Dispose() }
+    $list.ToArray()    # einzelne Objekte ausgeben (Pipeline entpackt das Array)
+}
+
+# ======================================================================
 # Lokale Warteschlange (DPAPI-verschlüsselt, ACL-geschützt)
 # ======================================================================
 function Initialize-QueueDirectory {
@@ -594,10 +716,14 @@ function Send-ExecutionResult {
 # Script-Ausführung (eigener Runspace)
 # ======================================================================
 function Add-OutputEntry {
-    param([string]$Type, [string]$Text)
+    param([string]$Type, [string]$Text, [string]$Prefix = '')
     if ([string]::IsNullOrWhiteSpace($Text)) { return }
     $run = $script:Run
     if ($run.Entries.Count -ge $MaxOutputEntries) { $run.Dropped++; return }
+    if ($Prefix) {
+        # Bei mehreren Scripten: Scriptname voranstellen (bei OUTPUT als eigene Zeile, damit Tabellen intakt bleiben)
+        if ($Type -eq 'OUTPUT') { $Text = $Prefix + "`n" + $Text } else { $Text = "$Prefix $Text" }
+    }
     if ($Text.Length -gt $MaxOutputChars) {
         $orig = $Text.Length
         $Text = $Text.Substring(0, $MaxOutputChars) + "`n[... gekürzt, ursprüngliche Länge: $orig Zeichen]"
@@ -605,36 +731,56 @@ function Add-OutputEntry {
     $run.Entries.Add([pscustomobject]@{ OutputType = $Type; OutputText = $Text })
 }
 
-function Invoke-ScriptSource {
-    # Ergebnis wird fortlaufend in $script:Run geschrieben, damit es auch bei einem Abbruch verfügbar ist.
-    param([Parameter(Mandatory)][string]$Source, [hashtable]$Parameters)
+function Add-StreamEntries {
+    # Überträgt Ausgabe und Streams eines Scripts in die Liste der Ausgabeeinträge.
+    param($Ps, $OutColl, [string]$Terminating, [string]$Prefix)
+    if ($OutColl.Count -gt 0) {
+        try { $text = ($OutColl | Out-String -Width 200).TrimEnd() }
+        catch { $text = (($OutColl | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) }
+        Add-OutputEntry -Type 'OUTPUT' -Text $text -Prefix $Prefix
+    }
+    if ($null -ne $Ps) {
+        foreach ($e in $Ps.Streams.Error)       { Add-OutputEntry -Type 'ERROR'       -Text (Format-ErrorRecord -Record $e) -Prefix $Prefix }
+        if (-not [string]::IsNullOrEmpty($Terminating)) { Add-OutputEntry -Type 'ERROR' -Text "Terminierender Fehler: $Terminating" -Prefix $Prefix }
+        foreach ($w in $Ps.Streams.Warning)     { Add-OutputEntry -Type 'WARNING'     -Text $w.Message -Prefix $Prefix }
+        foreach ($i in $Ps.Streams.Information) { Add-OutputEntry -Type 'INFORMATION' -Text $i.ToString() -Prefix $Prefix }
+        foreach ($v in $Ps.Streams.Verbose)     { Add-OutputEntry -Type 'VERBOSE'     -Text $v.Message -Prefix $Prefix }
+        foreach ($d in $Ps.Streams.Debug)       { Add-OutputEntry -Type 'DEBUG'       -Text $d.Message -Prefix $Prefix }
+    }
+}
 
-    $rs = $null; $ps = $null
+function Invoke-OneScript {
+    # Führt ein Script in einem bereits geöffneten Runspace aus. Der Runspace bleibt danach bestehen,
+    # sodass Funktionen und Variablen für folgende Scripte verfügbar sind.
+    param(
+        [Parameter(Mandatory)]$Runspace,
+        [Parameter(Mandatory)]$Item,
+        [Parameter(Mandatory)][System.Diagnostics.Stopwatch]$Total,
+        [bool]$Multi
+    )
+
+    $res = [pscustomobject]@{ Status = 'SUCCESS'; Message = $null; Stop = $false; TimedOut = $false }
+    $prefix = if ($Multi) { "[$($Item.Name)]" } else { '' }
+    $label  = if ($Multi) { "Script '$($Item.Name)': " } else { '' }
+    $where  = if ($Multi) { " bei '$($Item.Name)'" } else { '' }
+
+    $ps = $null
     $outColl = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
-    $timedOut = $false
     $terminating = $null
     try {
-        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-        $rs.Open()
-        $rs.SessionStateProxy.SetVariable('ProgressPreference', 'SilentlyContinue')
-        $rs.SessionStateProxy.SetVariable('PS_ExecutionID', $script:ExecutionId.ToString())
-        if ($CaptureVerbose) { $rs.SessionStateProxy.SetVariable('VerbosePreference', 'Continue') }
-        if ($CaptureDebug)   { $rs.SessionStateProxy.SetVariable('DebugPreference', 'Continue') }
-
         $ps = [System.Management.Automation.PowerShell]::Create()
-        $ps.Runspace = $rs
-        $null = $ps.AddScript($Source)
-        if ($null -ne $Parameters -and $Parameters.Count -gt 0) { $null = $ps.AddParameters($Parameters) }
+        $ps.Runspace = $Runspace
+        $null = $ps.AddScript([string]$Item.Source)
+        if ($null -ne $Item.Parameters -and $Item.Parameters.Count -gt 0) { $null = $ps.AddParameters($Item.Parameters) }
 
         $inColl = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
         $inColl.Complete()
         $async = $ps.BeginInvoke($inColl, $outColl)
 
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
         while (-not $async.AsyncWaitHandle.WaitOne(500)) {
-            if ($TimeoutSec -gt 0 -and $sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
-                $timedOut = $true
-                Write-ExecLog -Level WARNING -Message "Zeitüberschreitung nach $TimeoutSec s, das Script wird gestoppt."
+            if ($TimeoutSec -gt 0 -and $Total.Elapsed.TotalSeconds -ge $TimeoutSec) {
+                $res.TimedOut = $true
+                Write-ExecLog -Level WARNING -Message "Zeitüberschreitung nach $TimeoutSec s$where, das Script wird gestoppt."
                 $ps.Stop()
                 break
             }
@@ -642,7 +788,7 @@ function Invoke-ScriptSource {
 
         try { $null = $ps.EndInvoke($async) }
         catch {
-            if (-not $timedOut) {
+            if (-not $res.TimedOut) {
                 $base = $_.Exception.GetBaseException()
                 if ($base -is [System.Management.Automation.RuntimeException] -and $null -ne $base.ErrorRecord) {
                     $terminating = Format-ErrorRecord -Record $base.ErrorRecord
@@ -651,71 +797,113 @@ function Invoke-ScriptSource {
             }
         }
 
-        # Status ermitteln
+        # Status dieses Scripts
         $errCount  = $ps.Streams.Error.Count
         $warnCount = $ps.Streams.Warning.Count
-        if ($timedOut) {
-            $script:Run.Status       = 'CANCELLED'
-            $script:Run.ErrorMessage = "Zeitüberschreitung: Das Script wurde nach $TimeoutSec Sekunden gestoppt."
+        if ($res.TimedOut) {
+            $res.Status  = 'CANCELLED'
+            $res.Message = "Zeitüberschreitung${where}: Die Ausführung wurde nach $TimeoutSec Sekunden gestoppt."
+            $res.Stop    = $true
         }
         elseif ($null -ne $terminating) {
-            $script:Run.Status       = 'ERROR'
-            $script:Run.ErrorMessage = $terminating
+            $res.Status  = 'ERROR'
+            $res.Message = $label + $terminating
+            $res.Stop    = $true
         }
         elseif ($errCount -gt 0) {
-            $script:Run.Status       = 'ERROR'
-            $script:Run.ErrorMessage = "$errCount Fehler im Script. Erster Fehler: $($ps.Streams.Error[0].ToString())"
+            $res.Status  = 'ERROR'
+            $res.Message = "$label$errCount Fehler im Script. Erster Fehler: $($ps.Streams.Error[0].ToString())"
         }
         elseif ($warnCount -gt 0) {
-            $script:Run.Status       = 'WARNING'
-            $script:Run.ErrorMessage = $null
-        }
-        else {
-            $script:Run.Status       = 'SUCCESS'
-            $script:Run.ErrorMessage = $null
+            $res.Status = 'WARNING'
         }
     }
     catch {
         if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
         $terminating = "Interner Fehler bei der Ausführung des Scripts: $(Get-ErrorText $_)"
-        $script:Run.Status       = 'ERROR'
-        $script:Run.ErrorMessage = $terminating
+        $res.Status  = 'ERROR'
+        $res.Message = $label + $terminating
+        $res.Stop    = $true
     }
     finally {
-        # Bei Abbruch (Strg+C) laufendes Script stoppen.
+        # Bei Abbruch (Strg+C) laufendes Script stoppen und trotzdem Ausgaben einsammeln.
         if ($null -ne $ps) {
             try { if ($ps.InvocationStateInfo.State -eq 'Running') { $ps.Stop() } } catch { }
         }
-
-        # Ausgaben einsammeln (auch nach Abbruch)
-        try {
-            if ($outColl.Count -gt 0) {
-                try { $text = ($outColl | Out-String -Width 200).TrimEnd() }
-                catch { $text = (($outColl | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) }
-                Add-OutputEntry -Type 'OUTPUT' -Text $text
-            }
-            if ($null -ne $ps) {
-                foreach ($e in $ps.Streams.Error)       { Add-OutputEntry -Type 'ERROR'       -Text (Format-ErrorRecord -Record $e) }
-                if ($null -ne $terminating)             { Add-OutputEntry -Type 'ERROR'       -Text "Terminierender Fehler: $terminating" }
-                foreach ($w in $ps.Streams.Warning)     { Add-OutputEntry -Type 'WARNING'     -Text $w.Message }
-                foreach ($i in $ps.Streams.Information) { Add-OutputEntry -Type 'INFORMATION' -Text $i.ToString() }
-                foreach ($v in $ps.Streams.Verbose)     { Add-OutputEntry -Type 'VERBOSE'     -Text $v.Message }
-                foreach ($d in $ps.Streams.Debug)       { Add-OutputEntry -Type 'DEBUG'       -Text $d.Message }
-            }
-            if ($script:Run.Dropped -gt 0) {
-                $script:Run.Entries.Add([pscustomobject]@{
-                        OutputType = 'WARNING'
-                        OutputText = "Es wurden $($script:Run.Dropped) weitere Ausgabeeinträge verworfen (Limit: $MaxOutputEntries)."
-                    })
-            }
-        }
-        catch {
-            Write-ExecLog -Level WARNING -Message "Ausgaben konnten nicht vollständig erfasst werden: $(Get-ErrorText $_)"
-        }
-
+        try { Add-StreamEntries -Ps $ps -OutColl $outColl -Terminating $terminating -Prefix $prefix }
+        catch { Write-ExecLog -Level WARNING -Message "Ausgaben konnten nicht vollständig erfasst werden: $(Get-ErrorText $_)" }
         if ($null -ne $ps) { $ps.Dispose() }
+    }
+
+    $res
+}
+
+function Invoke-ScriptSession {
+    # Führt ein oder mehrere Scripte nacheinander im selben Runspace aus.
+    # Das Ergebnis wird in $script:Run geschrieben (auch bei einem Abbruch verfügbar).
+    param([Parameter(Mandatory)][object[]]$Items)
+
+    $multi   = $Items.Count -gt 1
+    $rs      = $null
+    $total   = [System.Diagnostics.Stopwatch]::StartNew()
+    $rank    = @{ SUCCESS = 0; WARNING = 1; ERROR = 2; CANCELLED = 3 }
+    $overall = 'SUCCESS'
+    $overallMessage = $null
+    try {
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('ProgressPreference', 'SilentlyContinue')
+        $rs.SessionStateProxy.SetVariable('PS_ExecutionID', $script:ExecutionId.ToString())
+        if ($CaptureVerbose) { $rs.SessionStateProxy.SetVariable('VerbosePreference', 'Continue') }
+        if ($CaptureDebug)   { $rs.SessionStateProxy.SetVariable('DebugPreference', 'Continue') }
+
+        if ($multi) {
+            $list = ($Items | ForEach-Object { '{0} (Version {1})' -f $_.Name, $_.Version }) -join ', '
+            Add-OutputEntry -Type 'INFORMATION' -Text ("Session mit {0} Scripten im selben Runspace: {1}. Hauptscript: '{2}'." -f $Items.Count, $list, $Items[$Items.Count - 1].Name)
+        }
+
+        for ($i = 0; $i -lt $Items.Count; $i++) {
+            $item = $Items[$i]
+            if ($multi) { Write-ExecLog -Level INFO -Message "Script $($i + 1) von $($Items.Count) gestartet: '$($item.Name)'." }
+
+            $r = Invoke-OneScript -Runspace $rs -Item $item -Total $total -Multi $multi
+
+            if ($rank[$r.Status] -gt $rank[$overall]) { $overall = $r.Status }
+            if ($r.Status -eq 'CANCELLED') { $overallMessage = $r.Message }
+            elseif ($r.Status -eq 'ERROR' -and $null -eq $overallMessage) { $overallMessage = $r.Message }
+
+            if ($r.Stop) {
+                for ($j = $i + 1; $j -lt $Items.Count; $j++) {
+                    Add-OutputEntry -Type 'WARNING' -Text ("Script '{0}' wurde nicht ausgeführt, weil '{1}' vorzeitig beendet wurde." -f $Items[$j].Name, $item.Name)
+                }
+                break
+            }
+        }
+
+        $script:Run.Status       = $overall
+        $script:Run.ErrorMessage = $overallMessage
+    }
+    catch {
+        if ($_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+        $msg = "Interner Fehler bei der Ausführung der Scripte: $(Get-ErrorText $_)"
+        Add-OutputEntry -Type 'ERROR' -Text $msg
+        $script:Run.Status       = 'ERROR'
+        $script:Run.ErrorMessage = $msg
+    }
+    finally {
+        if ($script:Run.Dropped -gt 0) {
+            $script:Run.Entries.Add([pscustomobject]@{
+                    OutputType = 'WARNING'
+                    OutputText = "Es wurden $($script:Run.Dropped) weitere Ausgabeeinträge verworfen (Limit: $MaxOutputEntries)."
+                })
+        }
         if ($null -ne $rs) { try { $rs.Close() } catch { }; $rs.Dispose() }
     }
+}
+
+function Get-ScriptNameList {
+    # -ScriptName akzeptiert mehrere Namen. Bei "-File" (Aufgabenplanung) kommen sie als ein Text "A,B" an.
+    @($ScriptName | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
 # ======================================================================
@@ -744,28 +932,118 @@ function Invoke-Main {
             return
         }
 
-        # --- Script ermitteln ---
-        if ($script:SetName -eq 'ByName') {
-            $match = Get-RepositoryScripts | Where-Object { $_.ScriptName -eq $ScriptName } | Select-Object -First 1
-            if (-not $match) {
-                Write-ExecLog -Level ERROR -Message "Script '$ScriptName' wurde nicht gefunden oder ist nicht aktiv."
+        # --- Abfragemodus: letzten Lauf anzeigen (-ShowLastRun / -ShowOutput) ---
+        if ($script:SetName -eq 'ShowLastRun' -or $script:SetName -eq 'ShowOutput') {
+            $showNames = @(Get-ScriptNameList)
+            if ($showNames.Count -ne 1) {
+                Write-ExecLog -Level ERROR -Message 'Der Abfragemodus (-ShowOutput / -ShowLastRun) unterstützt genau einen Scriptnamen. Bei einer Session mit mehreren Scripten den Namen des Hauptscripts (des letzten) angeben.'
                 $script:ExitCode = 3
                 return
             }
-            $id = $match.ScriptID
-        }
-        else { $id = $ScriptID }
+            $showName = $showNames[0]
+            try { $last = Get-LastExecution -Name $showName -Computer $ComputerName }
+            catch {
+                Write-ExecLog -Level ERROR -Message "Abfrage des letzten Laufs fehlgeschlagen (PS_ViewerRole erforderlich?): $(Get-ErrorText $_)"
+                $script:ExitCode = 3
+                return
+            }
+            if (-not $last) {
+                $where = if ($ComputerName) { " auf '$ComputerName'" } else { '' }
+                Write-ExecLog -Level WARNING -Message "Für '$showName'$where wurde kein Lauf gefunden."
+                $script:ExitCode = 3
+                return
+            }
 
-        # --- Script abrufen ---
-        try { $rec = Get-RepositoryScript -Id $id }
-        catch {
-            Write-ExecLog -Level ERROR -Message "Script (ID $id) konnte nicht abgerufen werden: $(Get-ErrorText $_)"
-            $script:ExitCode = 3
+            $started  = [datetime]::SpecifyKind($last.StartedUtc, [System.DateTimeKind]::Utc).ToLocalTime()
+            $finished = if ($null -ne $last.FinishedUtc) { [datetime]::SpecifyKind($last.FinishedUtc, [System.DateTimeKind]::Utc).ToLocalTime() } else { $null }
+            $duration = if ($null -ne $last.DurationMs) { [timespan]::FromMilliseconds([double]$last.DurationMs) } else { $null }
+
+            if ($script:SetName -eq 'ShowLastRun') {
+                [pscustomobject]@{
+                    ScriptName    = $last.ScriptName
+                    ScriptVersion = $last.ScriptVersion
+                    Status        = $last.Status
+                    Started       = $started
+                    Finished      = $finished
+                    Duration      = $duration
+                    ComputerName  = $last.ComputerName
+                    RunsAs        = $last.RunsAs
+                    OutputEntries = $last.OutputCount
+                    ExecutionID   = $last.ExecutionID
+                    ErrorMessage  = $last.ErrorMessage
+                }
+                return
+            }
+
+            # -ShowOutput: gespeicherte Ausgaben des letzten Laufs
+            Write-Host ("Letzter Lauf von '{0}' (Version {1}) auf {2} als {3}" -f $last.ScriptName, $last.ScriptVersion, $last.ComputerName, $last.RunsAs) -ForegroundColor Cyan
+            Write-Host ("Status: {0}   Start: {1:yyyy-MM-dd HH:mm:ss}   Dauer: {2}   ExecutionID: {3}" -f `
+                    $last.Status, $started, $(if ($null -ne $duration) { $duration.ToString() } else { '-' }), $last.ExecutionID) -ForegroundColor Cyan
+            if ($last.Status -eq 'STARTED') {
+                Write-Host 'Der Lauf ist noch aktiv oder wurde beendet, ohne das Ende zu melden (Status STARTED).' -ForegroundColor Yellow
+            }
+            if (-not [string]::IsNullOrWhiteSpace($last.ErrorMessage)) {
+                Write-Host "Fehlermeldung: $($last.ErrorMessage)" -ForegroundColor Red
+            }
+            Write-Host ''
+
+            $rows = @(Get-ExecutionOutputRows -ExecutionId $last.ExecutionID)
+            if ($OutputType) { $rows = @($rows | Where-Object { $OutputType -contains $_.OutputType }) }
+
+            if ($rows.Count -eq 0) {
+                Write-Host '(keine Ausgabeeinträge gespeichert' -NoNewline
+                if ($OutputType) { Write-Host " für Typ $($OutputType -join ', ')" -NoNewline }
+                Write-Host ')'
+                return
+            }
+
+            $colors = @{ ERROR = 'Red'; WARNING = 'Yellow'; INFORMATION = 'Cyan'; VERBOSE = 'DarkGray'; DEBUG = 'DarkGray' }
+            foreach ($r in $rows) {
+                $line  = '[{0}] {1}' -f $r.OutputType, $r.OutputText
+                $color = $colors[$r.OutputType]
+                if ($color) { Write-Host $line -ForegroundColor $color } else { Write-Host $line }
+            }
             return
         }
-        Write-ExecLog -Level INFO -Message "Script abgerufen: '$($rec.ScriptName)' (ID $($rec.ScriptID)), Version $($rec.ScriptVersion)."
 
-        # --- Systeminformationen und Kontext ---
+        # --- Scripte ermitteln (eines oder mehrere; das letzte ist das Hauptscript) ---
+        $ids = [System.Collections.Generic.List[int]]::new()
+        if ($script:SetName -eq 'ByName') {
+            $available = @(Get-RepositoryScripts)
+            $missing = [System.Collections.Generic.List[string]]::new()
+            foreach ($n in @(Get-ScriptNameList)) {
+                $found = $available | Where-Object { $_.ScriptName -eq $n } | Select-Object -First 1
+                if (-not $found) { $missing.Add($n) }
+                elseif ($ids.Contains($found.ScriptID)) {
+                    Write-ExecLog -Level WARNING -Message "Script '$n' wurde mehrfach angegeben und wird nur einmal ausgeführt."
+                }
+                else { $ids.Add($found.ScriptID) }
+            }
+            if ($missing.Count -gt 0) {
+                Write-ExecLog -Level ERROR -Message ("Script(e) nicht gefunden oder nicht aktiv: {0}" -f (($missing | ForEach-Object { "'$_'" }) -join ', '))
+                $script:ExitCode = 3
+                return
+            }
+        }
+        else { $ids.Add($ScriptID) }
+
+        # --- Scripte abrufen (alle, bevor etwas ausgeführt wird) ---
+        $recs = [System.Collections.Generic.List[object]]::new()
+        foreach ($id in $ids) {
+            try { $one = Get-RepositoryScript -Id $id }
+            catch {
+                Write-ExecLog -Level ERROR -Message "Script (ID $id) konnte nicht abgerufen werden: $(Get-ErrorText $_)"
+                $script:ExitCode = 3
+                return
+            }
+            $recs.Add($one)
+            Write-ExecLog -Level INFO -Message "Script abgerufen: '$($one.ScriptName)' (ID $($one.ScriptID)), Version $($one.ScriptVersion)."
+        }
+        $rec   = $recs[$recs.Count - 1]      # Hauptscript = das letzte
+        $multi = $recs.Count -gt 1
+        $names = ($recs | ForEach-Object { $_.ScriptName }) -join ' -> '
+
+        # --- Systeminformationen und Kontext (Protokoll läuft unter dem Hauptscript) ---
         $sys = Get-SystemInfo
         $script:Ctx = [pscustomobject]@{
             ScriptID          = $rec.ScriptID
@@ -780,18 +1058,20 @@ function Invoke-Main {
         }
         $script:ExecutionId = [guid]::NewGuid()
 
-        # --- Integritätsprüfung ---
-        $localHash = Get-SourceHash -Source $rec.ScriptSource
-        if ($localHash -ne $rec.HashSHA256) {
-            $msg = "Hash-Abweichung: berechnet=$localHash, Datenbank=$($rec.HashSHA256). Das Script wird nicht ausgeführt."
-            Write-ExecLog -Level ERROR -Message $msg
-            $now = [datetime]::UtcNow
-            $entry = New-LogEntry -Status 'ERROR' -StartedAt $now -FinishedAt $now -DurationMs 0 -ErrorMessage $msg
-            $null = Send-ExecutionResult -Entry $entry -Outputs @()
-            $script:ExitCode = 4
-            return
+        # --- Integritätsprüfung aller Scripte ---
+        foreach ($s in $recs) {
+            $localHash = Get-SourceHash -Source $s.ScriptSource
+            if ($localHash -ne $s.HashSHA256) {
+                $msg = "Hash-Abweichung bei '$($s.ScriptName)': berechnet=$localHash, Datenbank=$($s.HashSHA256). Es wird kein Script ausgeführt."
+                Write-ExecLog -Level ERROR -Message $msg
+                $now = [datetime]::UtcNow
+                $entry = New-LogEntry -Status 'ERROR' -StartedAt $now -FinishedAt $now -DurationMs 0 -ErrorMessage $msg
+                $null = Send-ExecutionResult -Entry $entry -Outputs @()
+                $script:ExitCode = 4
+                return
+            }
+            Write-ExecLog -Level DEBUG -Message "Hash geprüft: '$($s.ScriptName)' $localHash"
         }
-        Write-ExecLog -Level DEBUG -Message "Hash geprüft: $localHash"
 
         # --- Ausführung ---
         $script:Run = [pscustomobject]@{
@@ -799,6 +1079,17 @@ function Invoke-Main {
             ErrorMessage = 'Die Ausführung wurde vorzeitig abgebrochen.'
             Entries      = [System.Collections.Generic.List[object]]::new()
             Dropped      = 0
+        }
+
+        $items = [System.Collections.Generic.List[object]]::new()
+        for ($k = 0; $k -lt $recs.Count; $k++) {
+            $isMain = ($k -eq $recs.Count - 1)
+            $items.Add([pscustomobject]@{
+                    Name       = $recs[$k].ScriptName
+                    Version    = $recs[$k].ScriptVersion
+                    Source     = $recs[$k].ScriptSource
+                    Parameters = $(if ($isMain) { $ScriptParameters } else { $null })
+                })
         }
 
         $startedAt = [datetime]::UtcNow
@@ -812,10 +1103,15 @@ function Invoke-Main {
             Write-ExecLog -Level WARNING -Message "Startmeldung konnte nicht gespeichert werden (das Endergebnis wird nachgetragen): $(Get-ErrorText $_)"
         }
 
-        Write-ExecLog -Level INFO -Message "Ausführung gestartet: '$($rec.ScriptName)' Version $($rec.ScriptVersion) auf $($sys.ComputerName) als $($sys.RunsAs)."
+        if ($multi) {
+            Write-ExecLog -Level INFO -Message "Ausführung gestartet: Session mit $($recs.Count) Scripten ($names), Hauptscript '$($rec.ScriptName)' Version $($rec.ScriptVersion) auf $($sys.ComputerName) als $($sys.RunsAs)."
+        }
+        else {
+            Write-ExecLog -Level INFO -Message "Ausführung gestartet: '$($rec.ScriptName)' Version $($rec.ScriptVersion) auf $($sys.ComputerName) als $($sys.RunsAs)."
+        }
 
         try {
-            Invoke-ScriptSource -Source $rec.ScriptSource -Parameters $ScriptParameters
+            Invoke-ScriptSession -Items $items.ToArray()
         }
         finally {
             $sw.Stop()
@@ -828,7 +1124,7 @@ function Invoke-Main {
         Write-ExecLog -Level INFO -Message ("Ausführung beendet: Status {0}, Dauer {1} ms, {2} Ausgabeeinträge, Übertragung: {3}." -f `
                 $script:Run.Status, [long]$sw.ElapsedMilliseconds, $script:Run.Entries.Count, $delivery)
 
-        if ($ShowOutput) {
+        if ($PrintOutput) {
             foreach ($e in $script:Run.Entries) {
                 Write-Host ("[{0}] {1}" -f $e.OutputType, $e.OutputText)
             }
@@ -841,6 +1137,7 @@ function Invoke-Main {
             ScriptName  = $rec.ScriptName
             ScriptID    = $rec.ScriptID
             Version     = $rec.ScriptVersion
+            Scripts     = $names
             Status      = $script:Run.Status
             DurationMs  = [long]$sw.ElapsedMilliseconds
             Delivery    = $delivery
